@@ -5,26 +5,40 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.net.Uri
-import com.yalantis.ucrop.UCrop
 import android.os.Bundle
 import android.util.Log
+import android.view.Menu
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.dicoding.asclepius.R
 import com.dicoding.asclepius.databinding.ActivityMainBinding
 import com.dicoding.asclepius.helper.ImageClassifierHelper
+import com.yalantis.ucrop.UCrop
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
+    private lateinit var imageClassifierHelper: ImageClassifierHelper
+
     private var currentImageUri: Uri? = null
 
     private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
         this, REQUIRED_PERMISSION
     ) == PackageManager.PERMISSION_GRANTED
+
+    private val requestPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted: Boolean ->
+        if (granted) {
+            displayToast(this@MainActivity, "Permission request granted")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,18 +51,40 @@ class MainActivity : AppCompatActivity() {
 
         binding.galleryButton.setOnClickListener { startGallery() }
         binding.analyzeButton.setOnClickListener { analyzeImage() }
-    }
 
-    private val requestPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted: Boolean ->
-        if (granted) {
-            display(this@MainActivity, "Permission request granted")
-        }
-    }
+        imageClassifierHelper = ImageClassifierHelper(
+            context = this@MainActivity,
+            classifierListener = object : ImageClassifierHelper.ClassifierListener {
+                override fun onError(error: String) {
+                    displayToast(this@MainActivity, error)
+                }
 
-    fun display(context: Context, message: String) {
-        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                override fun onResults(results: List<org.tensorflow.lite.task.vision.classifier.Classifications>?, inferenceTime: Long) {
+                    runOnUiThread {
+                        binding.progressIndicator.visibility = View.GONE
+                        try {
+                            results?.let {
+                                val category = it[0].categories[0].label
+                                val confidence = it[0].categories[0].score
+
+                                currentImageUri?.let { uri ->
+                                    this@MainActivity.contentResolver.openInputStream(uri)
+                                        ?.use { inputStream ->
+                                            val bitmap = BitmapFactory.decodeStream(inputStream)
+                                            binding.previewImageView.setImageBitmap(bitmap)
+                                        }
+                                }
+
+                                val accuracy = formatPercent(confidence)
+                                goToResult("$category with accuracy : $accuracy")
+                            }
+                        } catch (e: Exception) {
+                            onError(e.message.toString())
+                        }
+                    }
+                }
+            }
+        )
     }
 
     private fun startGallery() {
@@ -58,6 +94,15 @@ class MainActivity : AppCompatActivity() {
             requestPermission.launch(REQUIRED_PERMISSION)
         }
         launcherGallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+
+    private fun analyzeImage() {
+        if (currentImageUri != null) {
+            binding.progressIndicator.visibility = View.VISIBLE
+            imageClassifierHelper.classifyStaticImage(currentImageUri!!)
+        } else {
+            displayToast(this@MainActivity, getString(R.string.empty_image))
+        }
     }
 
     private val launcherGallery = registerForActivityResult(
@@ -71,8 +116,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
-    @Deprecated("This method has been deprecated in favor of using the Activity Result API\n      which brings increased type safety via an {@link ActivityResultContract} and the prebuilt\n      contracts for common intents available in\n      {@link androidx.activity.result.contract.ActivityResultContracts}, provides hooks for\n      testing, and allow receiving results in separate, testable classes independent from your\n      activity. Use\n      {@link #registerForActivityResult(ActivityResultContract, ActivityResultCallback)}\n      with the appropriate {@link ActivityResultContract} and handling the result in the\n      {@link ActivityResultCallback#onActivityResult(Object) callback}.")
+    @Deprecated("This method has been deprecated in favor of using the Activity Result API")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (resultCode == Activity.RESULT_OK && requestCode == UCrop.REQUEST_CROP) {
@@ -85,24 +129,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
-    private fun analyzeImage() {
-        currentImageUri?.let { uri ->
-            val classifier = ImageClassifierHelper(this)
-            val result = classifier.classifyStaticImage(uri)
-
-            if (result != null) {
-                val (prediction, confidence) = result
-                val intent = Intent(this, ResultActivity::class.java).apply {
-                    putExtra("RESULT_IMAGE_URI", uri.toString())
-                    putExtra("PREDICTION_TEXT", prediction)
-                    putExtra("CONFIDENCE_SCORE", confidence)
-                }
-                startActivity(intent)
-            } else {
-                showToast("Image analysis failed.")
-            }
-        } ?: showToast("Please select an image first.")
+    private fun goToResult(prediction: String) {
+        val intent = Intent(this, ResultActivity::class.java)
+        intent.putExtra(ResultActivity.EXTRA_IMAGE_URI, currentImageUri.toString())
+        intent.putExtra(ResultActivity.EXTRA_PREDICTION, prediction)
+        startActivity(intent)
     }
 
     private fun showImage() {
@@ -112,11 +143,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showToast(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    }
-
     companion object {
         private const val REQUIRED_PERMISSION = Manifest.permission.CAMERA
+    }
+
+    fun displayToast(context: Context, message: String) {
+        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    }
+
+    fun formatPercent(value: Float): String {
+        val percentage = value * 100
+        val roundedPercentage = kotlin.math.round(percentage).toInt()
+        return "$roundedPercentage%"
     }
 }

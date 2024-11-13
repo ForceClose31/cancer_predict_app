@@ -6,4 +6,6 @@
     <string name="analyze">Analyze</string>
     <string name="result">Hasil Analisis</string>
     <string name="confidence_score">Prediction: %1$s, Confidence: %.2f%%</string>
+    <string name="classifier_failed">Image Classifier Failed</string>
+    <string name="empty_image">Image cannot empty</string>
 </resources>
